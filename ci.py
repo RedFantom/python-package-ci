@@ -3,6 +3,7 @@ Author: RedFantom
 License: GNU GPLv3
 Copyright (c) 2017-2018 RedFantom
 """
+from ast import literal_eval
 from configparser import ConfigParser
 import logging
 import os
@@ -18,17 +19,30 @@ SDIST = os.environ.get("SDIST", "false") == "true"
 TO_DELETE = ["ttkthemes", "tkimg"]
 
 
+def error(message):
+    sys.stderr.write(message)
+
+
 def run_command(command):
     """
     :param command: command to run on os.system
     :return: exit code
     """
+    if isinstance(command, list):
+        command = " ".join(command)
     print("Running system command: ", command)
     return_info = os.system(command)
     if sys.platform == "win32":
         return return_info
     else:
         return os.WEXITSTATUS(return_info)
+
+
+class CIError(RuntimeError):
+    """Error raised when CI fails"""
+
+    def __init__(self, message):
+        RuntimeError.__init__(self, message)
 
 
 class CI(object):
@@ -50,26 +64,87 @@ class CI(object):
 
     CONFIG = ["ci.ini", ".ci.ini"]
 
-    def __init__(self, platform=None):
+    SOURCE = "sdist"
+    BINARY = "bdist_wheel"
+
+    PYTHON = {
+        APPVEYOR: {
+            WINDOWS: "%PYTHON%\\python.exe",
+            # TODO: Support AppVeyor Ubuntu images
+        },
+        TRAVIS_CI: {
+            LINUX: "python",
+            MACOS: "$PYTHON"
+        },
+        # TODO: Implement CircleCI support
+    }
+
+    TRUE = ("True", "true", True)
+    FALSE = ("False", "false", False)
+
+    def __init__(self, platform=None, python=None):
         """
         :param platform: Optional platform override
+        :param python: Optional python command override
         """
         self.logger = self.setup_logger()
-        self.platform = platform if platform is not None else self.get_platform()
+        self.platform = self.get_platform() if platform is None else platform
         self.os = self.get_os()
+        self.python = self.get_python_command() if python is None else python
+        if os.environ.get("SDIST", "false") == "true":
+            self.type = CI.SOURCE
+        else:
+            self.type = CI.BINARY
         self.config = ConfigParser()
         self.read_config()
+        self.package = self.config["package"]["name"]
+        if "working_dir" in self.config["environ"]:
+            os.chdir(self.config["environ"]["working_dir"])
 
-    def build_wheel(self):
-        """Build a wheel from a package"""
+    def run_tests(self):
+        """Run the tests with nose or as specified in the config file"""
+        tests = self.config["package"].get("tests", "nose")
+
+        if tests == "nose":
+            command = [self.python, "-m", "nose"]
+            if self.config["coverage"].get("enabled", "false") in CI.TRUE:
+                command += ["--with-coverage", "--cover-xml"]
+                command.append("--cover-package={}".format(self.package))
+            return run_command(command)
+
+        if self.config["coverage"].get("enabled", "false") in CI.TRUE:
+            raise CIError("Coverage cannot be enabled without nose")
+
+        files = self.parse_config_list(tests)
+        for test in files:
+            command = [self.python, test]
+            result = run_command(command)
+            if result != 0:
+                error("Test '{}' failed.".format(test))
+                return result
+        return 0
+
+    def run_coverage(self):
+        """Upload the coverage file to the coverage provider"""
         pass
+
+    def build_package(self):
+        """Build a wheel or sdist from a package"""
+        # Build the installation wheel
+        return_code = run_command("{} setup.py {}".format(self.python, self.type))
+        if return_code != 0:
+            raise CIError("Building package failed")
 
     def read_config(self):
         """Read the configuration file from disk"""
         path = self.get_config_path()
         if path is None:
-            raise FileNotFoundError("Configuration file could not be found")
+            raise CIError("Configuration file could not be found")
         self.config.read_file(path)
+
+    def get_python_command(self):
+        """Return the command to run Python in shell"""
+        return CI.PYTHON[self.platform][self.os]
 
     @staticmethod
     def get_built_package_exists():
@@ -77,19 +152,20 @@ class CI(object):
         return len([file for file in os.listdir("dist") if file.endswith((".whl", ".tar.gz"))]) != 0
 
     @staticmethod
-    def pip_install(pkgs: list):
+    def get_built_package_file():
+        """Return a relative path to the wheel or sdist file"""
+        wheel = [file for file in os.listdir("dist") if file.endswith((".whl", ".tar.gz"))][0]
+        return os.path.join("dist", wheel)
+
+    def install_package_file(self, file):
+        """Install a given package with pip"""
+        self.pip_install(["--ignore-installed", "{}".format(self.package)])
+
+    def pip_install(self, pkgs):
         """Install a list of packages with pip"""
-
-        # Import pip
-        from pip import __version__ as pip_version
-        if Version(pip_version) >= Version("10.0.0"):
-            import pip._internal as pip
-        else:
-            import pip
-
         # Install/upgrade the specified packages
-        command = ["install", "-U"] + pkgs
-        pip.main(command)
+        command = [self.python, "-m", "pip", "install", "-U"] + pkgs
+        return run_command(command) == 0
 
     @staticmethod
     def get_config_path():
@@ -133,101 +209,17 @@ class CI(object):
         logger.addHandler(stdout)
         return logger
 
-
-class Version(object):
-    """Parses a semantic version string."""
-    def __init__(self, string):
+    @staticmethod
+    def parse_config_list(string):
         """
-        :param string: semantic version string (major.minor.patch)
+        Return a list of elements found in the config file
+
+        Examples:
+            "tests/test1.py" -> ["tests/test1.py"]
+            "['test1.py', 'test2.py']" -> ["test1.py", "test2.py"]
         """
-        self.major, self.minor, self.patch = map(int, string.split("."))
-        self.version = (self.major, self.minor, self.patch)
-
-    def __ge__(self, other):
-        return all(elem1 >= elem2 for elem1, elem2 in zip(self.version, other.version))
-
-
-def ci(python="python", codecov="codecov", coverage_file="coverage.xml"):
-    """Run the most common CI tasks"""
-
-    # Build the installation wheel
-    dist_type = "bdist_wheel" if not SDIST else "sdist"
-    return_code = run_command("{} setup.py {}".format(python, dist_type))
-    if return_code != 0:
-        print("Building and installing wheel failed.")
-        exit(return_code)
-    assert os.path.exists(os.path.join("ttkthemes", "tkimg"))
-
-    # Check if an artifact exists
-    assert check_wheel_existence()
-    print("Wheel file exists.")
-    # Install the wheel file
-    wheel = [file for file in os.listdir("dist") if file.endswith((".whl", ".tar.gz"))][0]
-    wheel = os.path.join("dist", wheel)
-    print("Wheel file:", wheel)
-    return_code = run_command("{} -m pip install --ignore-installed {}".format(python, wheel))
-    if return_code != 0:
-        print("Installation of wheel failed.")
-        exit(return_code)
-    print("Wheel file installed.")
-
-    # Remove all non-essential files
-    for to_delete in TO_DELETE:
-        rmtree(to_delete)
-    # Run the tests on the installed ttkthemes
-    return_code = run_command("{} -m nose --with-coverage --cover-xml --cover-package=ttkthemes".format(python))
-    if return_code != 0:
-        print("Tests failed.")
-        exit(return_code)
-    print("Tests successful.")
-    # Run codecov
-    return_code = run_command("{} -f {}".format(codecov, coverage_file))
-    if return_code != 0:
-        print("Codecov failed.")
-        exit(return_code)
-    # Successfully finished CI
-    exit(0)
-
-
-def ci_windows():
-    """
-    Run CI tasks on AppVeyor. CI on AppVeyor is relatively easy, so
-    just the general ci() is used.
-    """
-    ci(
-        python="%PYTHON%\\python.exe",
-        codecov="%PYTHON%\\Scripts\\codecov.exe",
-        coverage_file="C:\\projects\\ttk-themes\\coverage.xml"
-    )
-
-
-def ci_macos():
-    """Setup Travis-CI macOS for wheel building"""
-    run_command("brew install $PYTHON pipenv || echo \"Installed PipEnv\"")
-    command_string = "sudo -H $PIP install "
-    for element in DEPENDENCIES + REQUIREMENTS + ["-U"]:
-        command_string += element + " "
-    run_command(command_string)
-    # Build a wheel
-    run_command("sudo -H $PYTHON setup.py bdist_wheel")
-    assert check_wheel_existence()
-    exit(0)
-
-
-def ci_linux():
-    """Setup Travis-CI linux for installation and testing"""
-    run_command("sudo apt-get install {}".format(PACKAGES))
-    ci()
-
-
-# Run CI tasks on AppVeyor and Travis-CI (macOS and Linux)
-if __name__ == '__main__':
-    if sys.platform == "win32":
-        ci_windows()
-    elif "linux" in sys.platform:   # linux2 on Python 2, linux on Python 3
-        ci_linux()
-    elif sys.platform == "darwin":
-        ci_macos()
-    else:
-        raise RuntimeError("Invalid platform: ", sys.platform)
+        try:
+            return literal_eval(string)
+        except ValueError:
+            return [string]
 
