@@ -10,14 +10,6 @@ import os
 from shutil import rmtree
 import sys
 
-DEPENDENCIES = ["pillow"]
-REQUIREMENTS = ["codecov", "coverage", "nose", "setuptools", "pip", "wheel", "semantic_version"]
-PACKAGES = "python-tk python3-tk libtk-img"
-
-SDIST = os.environ.get("SDIST", "false") == "true"
-
-TO_DELETE = ["ttkthemes", "tkimg"]
-
 
 def error(message):
     sys.stderr.write(message)
@@ -34,8 +26,7 @@ def run_command(command):
     return_info = os.system(command)
     if sys.platform == "win32":
         return return_info
-    else:
-        return os.WEXITSTATUS(return_info)
+    return os.WEXITSTATUS(return_info)
 
 
 class CIError(RuntimeError):
@@ -98,8 +89,86 @@ class CI(object):
         self.config = ConfigParser()
         self.read_config()
         self.package = self.config["package"]["name"]
-        if "working_dir" in self.config["environ"]:
-            os.chdir(self.config["environ"]["working_dir"])
+
+    def run(self):
+        """Run the CI tasks"""
+        print("Starting package CI tasks for package: {}".format(self.package))
+        self.prepare_platform()
+        before = self.config["package"].get("before", [])
+        after = self.config["package"].get("after", [])
+
+        self.install_dependencies()
+
+        result = self.run_scripts(self.parse_config_list(before))
+        if result != 0:
+            raise CIError("Failed to execute before tasks")
+
+        self.build_package()
+
+        exists = self.get_built_package_exists()
+        if exists is False:
+            raise CIError("Failed to build the package")
+
+        result = self.pip_install([self.get_built_package_file()])
+        if result != 0:
+            raise CIError("Failed to install the built package")
+
+        self.remove_files()
+
+        result = self.run_tests()
+        if result != 0:
+            error("Tests failed.")
+            exit(result)
+
+        result = self.run_scripts(self.parse_config_list(after))
+        if result != 0:
+            raise CIError("Failed to execute after tasks")
+
+        self.run_coverage()
+
+    def prepare_platform(self):
+        """Prepare the specific platform with the instructions"""
+        working_dir = self.config[self.os].get("working_dir", None)
+        if working_dir is not None:
+            os.chdir(working_dir)
+
+        tasks = self.config[self.os].get("packages", None)
+        if tasks is None:
+            return 0
+        tasks = self.parse_config_list(tasks)
+        result = 0
+
+        if self.os == CI.WINDOWS:  # Execute commands
+            for task in tasks:
+                code = run_command(task)
+                if code != 0:
+                    error("Execution of '{}' failed.".format(task))
+                    result = code
+                    break
+                result = 0
+
+        elif self.os == CI.LINUX:
+            command = "sudo apt-get install"
+            command += " ".join(tasks)
+            result = run_command(command)
+
+        elif self.os == CI.MACOS:
+            command = "brew install" + " ".join(tasks)
+            result = run_command(command)
+
+        if result != 0:
+            raise CIError("Failed to prepare platform")
+
+    def install_dependencies(self):
+        """Install the dependencies given and in requirements.txt"""
+        deps = self.config["package"].get("dependencies", None)
+        result = False
+        if deps is None:
+            result = self.pip_install(self.parse_config_list(deps)) or result
+        if os.path.exists("requirements.txt"):
+            result = self.pip_install(["-r requirements.txt"]) or result
+        if result is not False:  # One result is not 0 (Falsey)
+            raise CIError("Installation of dependencies failed")
 
     def run_tests(self):
         """Run the tests with nose or as specified in the config file"""
@@ -124,9 +193,27 @@ class CI(object):
                 return result
         return 0
 
+    def run_scripts(self, scripts):
+        """Run a set of Python scripts"""
+        for script in scripts:
+            command = [self.python, script]
+            result = run_command(command)
+            if result != 0:
+                error("Script '{}' failed.".format(script))
+                return result
+        return 0
+
     def run_coverage(self):
         """Upload the coverage file to the coverage provider"""
-        pass
+        if self.config["coverage"]["enabled"] not in CI.TRUE:
+            return
+        provider = self.config["coverage"].get("provider", None)
+        if provider is None:
+            error("Coverage enabled but no coverage probider specified")
+            return
+        self.pip_install([provider])
+        command = [self.python, "-m", provider]
+        return run_command(command)
 
     def build_package(self):
         """Build a wheel or sdist from a package"""
@@ -145,6 +232,13 @@ class CI(object):
     def get_python_command(self):
         """Return the command to run Python in shell"""
         return CI.PYTHON[self.platform][self.os]
+
+    def remove_files(self):
+        """Remove the files specified in the configuration file"""
+        to_delete = self.config["package"].get("delete", [])
+        to_delete = self.parse_config_list(to_delete)
+        for path in to_delete:
+            rmtree(path)
 
     @staticmethod
     def get_built_package_exists():
@@ -223,3 +317,6 @@ class CI(object):
         except ValueError:
             return [string]
 
+
+if __name__ == '__main__':
+    CI().run()
