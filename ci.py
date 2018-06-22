@@ -4,7 +4,10 @@ License: GNU GPLv3
 Copyright (c) 2017-2018 RedFantom
 """
 from ast import literal_eval
-from configparser import ConfigParser
+try:
+    from configparser import ConfigParser
+except ImportError:
+    from ConfigParser import ConfigParser
 import logging
 import os
 from shutil import rmtree
