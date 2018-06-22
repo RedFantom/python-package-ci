@@ -166,8 +166,8 @@ class CI(object):
         """Install the dependencies given and in requirements.txt"""
         deps = self.config["package"].get("dependencies", None)
         result = False
-        if deps is None:
-            result = self.pip_install(self.parse_config_list(deps)) or result
+        if deps is not None and len(deps) > 0:
+            result = self.pip_install(deps) or result
         if os.path.exists("requirements.txt"):
             result = self.pip_install(["-r requirements.txt"]) or result
         if result is not False:  # One result is not 0 (Falsey)
