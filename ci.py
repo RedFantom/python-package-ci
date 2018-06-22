@@ -82,6 +82,8 @@ class CI(object):
         :param python: Optional python command override
         """
         self.logger = self.setup_logger()
+        self.config = ConfigParser()
+        self.read_config()
         self.platform = self.get_platform() if platform is None else platform
         self.os = self.get_os()
         self.python = self.get_python_command() if python is None else python
@@ -89,7 +91,6 @@ class CI(object):
             self.type = CI.SOURCE
         else:
             self.type = CI.BINARY
-        self.config = ConfigParser()
         self.read_config()
         self.package = self.config["package"]["name"]
 
@@ -97,9 +98,8 @@ class CI(object):
         """Run the CI tasks"""
         print("Starting package CI tasks for package: {}".format(self.package))
         self.prepare_platform()
-        before = self.config["package"].get("before", [])
-        after = self.config["package"].get("after", [])
-
+        before = self.config["package"].get("before", None)
+        after = self.config["package"].get("after", None)
         self.install_dependencies()
 
         result = self.run_scripts(self.parse_config_list(before))
@@ -316,6 +316,8 @@ class CI(object):
             "tests/test1.py" -> ["tests/test1.py"]
             "['test1.py', 'test2.py']" -> ["test1.py", "test2.py"]
         """
+        if string is None:
+            return list()
         try:
             return literal_eval(string)
         except ValueError:
