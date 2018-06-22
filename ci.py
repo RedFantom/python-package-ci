@@ -165,8 +165,9 @@ class CI(object):
     def install_dependencies(self):
         """Install the dependencies given and in requirements.txt"""
         deps = self.config["package"].get("dependencies", None)
+        deps = self.parse_config_list(deps)
         result = False
-        if deps is not None and len(deps) > 0:
+        if len(deps) > 0:
             result = self.pip_install(deps) or result
         if os.path.exists("requirements.txt"):
             result = self.pip_install(["-r requirements.txt"]) or result
@@ -230,8 +231,7 @@ class CI(object):
         path = self.get_config_path()
         if path is None:
             raise CIError("Configuration file could not be found")
-        with open(path) as fi:
-            self.config.read_file(fi)
+        self.config.read(path)
 
     def get_python_command(self):
         """Return the command to run Python in shell"""
