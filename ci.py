@@ -166,13 +166,14 @@ class CI(object):
         """Install the dependencies given and in requirements.txt"""
         deps = self.config["package"].get("dependencies", None)
         deps = self.parse_config_list(deps)
-        result = False
         if len(deps) > 0:
-            result = self.pip_install(deps) or result
+            r = self.pip_install(deps)
+            if r != 0:
+                raise CIError("Installation of pip dependencies failed: {}".format(r))
         if os.path.exists("requirements.txt"):
-            result = self.pip_install(["-r requirements.txt"]) or result
-        if result is not False:  # One result is not 0 (Falsey)
-            raise CIError("Installation of dependencies failed")
+            r = self.pip_install(["-r requirements.txt"])
+            if r != 0:
+                raise CIError("Installation of requirements.txt failed: {}".format(r))
 
     def run_tests(self):
         """Run the tests with nose or as specified in the config file"""
