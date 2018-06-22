@@ -230,7 +230,8 @@ class CI(object):
         path = self.get_config_path()
         if path is None:
             raise CIError("Configuration file could not be found")
-        self.config.read_file(path)
+        with open(path) as fi:
+            self.config.read_file(fi)
 
     def get_python_command(self):
         """Return the command to run Python in shell"""
