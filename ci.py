@@ -264,7 +264,7 @@ class CI(object):
         """Install a list of packages with pip"""
         # Install/upgrade the specified packages
         command = [self.python, "-m", "pip", "install", "-U"] + pkgs
-        return run_command(command) == 0
+        return run_command(command)
 
     @staticmethod
     def get_config_path():
