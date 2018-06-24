@@ -16,9 +16,10 @@ TRAVIS_CI_BEFORE = [
     "      sleep 3;",
     # Installs Python on macOS
     "    else",
-    "      brew install python python3 wget || echo \"Installed Python and wget\";",
+    "      brew upgrade python wget || echo \"Installed Python and wget\";",
     "    fi;",
     "  - wget {}".format(SCRIPT),
+    "  - $PYTHON -m pip install configparser -U",
 ]
 
 TRAVIS_SCRIPT = [
@@ -35,7 +36,8 @@ TRAVIS_OSX_MATRIX_ELEM = [
 
 APPVEYOR_BEFORE = [
     "before_test:",
-    "  - ps: Start-FileDownload '{}'".format(SCRIPT)
+    "  - ps: Start-FileDownload '{}'".format(SCRIPT),
+    "  - %PYTHON%\\python.exe -m pip install configparser -U"
 ]
 
 

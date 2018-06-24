@@ -4,10 +4,7 @@ License: GNU GPLv3
 Copyright (c) 2017-2018 RedFantom
 """
 from ast import literal_eval
-try:
-    from configparser import ConfigParser
-except ImportError:
-    from ConfigParser import ConfigParser
+from configparser import ConfigParser
 import logging
 import os
 from shutil import rmtree
@@ -240,7 +237,7 @@ class CI(object):
 
     def remove_files(self):
         """Remove the files specified in the configuration file"""
-        to_delete = self.config["package"].get("delete", [])
+        to_delete = self.config["package"].get("delete", None)
         to_delete = self.parse_config_list(to_delete)
         for path in to_delete:
             rmtree(path)
